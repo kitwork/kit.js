@@ -15,8 +15,11 @@
   "use strict";
   var kitwork = (window.kitwork = window.kitwork || {});
 
-  const defaultCDNComponents = "https://components.kitwork.vn";
-  kitwork.cdnComponents = kitwork.cdnComponents || defaultCDNComponents;
+  // Component auto-loading is OPT-IN: set kitwork.cdnComponents to a base URL (e.g. an npm CDN like
+  // jsdelivr) BEFORE the kernel boots, and an unregistered data-kitwork-component is fetched from
+  // <base>/<name>/<version|name>.js. Default OFF — a Kitwork-engine page delivers components itself
+  // and never silently phones home, and the "no dependencies" promise holds until you pick a CDN.
+  kitwork.cdnComponents = kitwork.cdnComponents || "";
 
   if (kitwork.runtime) return;
   kitwork.runtime = "v.1.0.0";
@@ -192,12 +195,21 @@
   // callDepth is the client twin of the server walker's op budget: lambdas cannot loop, so the
   // only runaway is recursion — cut it off instead of blowing the stack.
   var callDepth = 0;
+  // blockedKey seals the ONLY member names that can reach code execution — `.constructor` leads to
+  // Function (i.e. eval), and __proto__/prototype enable prototype pollution. Denying them in every
+  // read / call / write makes "no eval" true BY CONSTRUCTION (not merely blocked by CSP), which is
+  // the precondition for running client-sent expressions (capsules) safely.
+  function blockedKey(k) {
+    return k === "constructor" || k === "__proto__" || k === "prototype" ||
+           k === "ownerDocument" || k === "defaultView" || k === "contentWindow" ||
+           k === "window" || k === "parent" || k === "top" || k === "self" || k === "globalThis";
+  }
   function run(x, s) {
     var op = x[0];
     if (op === "#") return x[1];
     if (op === "$") return s[x[1]];
-    if (op === "=") { var v = run(x[2], s); s[x[1]] = v; return v; }
-    if (op === "=$") { var vp = run(x[2], s); s["$"][x[1]] = vp; return vp; }
+    if (op === "=") { if (blockedKey(x[1])) return undefined; var v = run(x[2], s); s[x[1]] = v; return v; }
+    if (op === "=$") { if (blockedKey(x[1])) return undefined; var vp = run(x[2], s); s["$"][x[1]] = vp; return vp; }
     if (op === "{}") {
       var obj = {};
       for (var oi = 0; oi < x[1].length; oi++) obj[x[1][oi][0]] = run(x[1][oi][1], s);
@@ -239,8 +251,8 @@
       return undefined;
     }
     if (op === "?") return run(x[1], s) ? run(x[2], s) : run(x[3], s);
-    if (op === ".") { var o = run(x[1], s); return o == null ? undefined : o[x[2]]; }
-    if (op === "()") { var oo = run(x[1], s), a = x[3].map(function (y) { return run(y, s); }); return oo != null && typeof oo[x[2]] === "function" ? oo[x[2]].apply(oo, a) : undefined; }
+    if (op === ".") { var o = run(x[1], s); return (o == null || blockedKey(x[2])) ? undefined : o[x[2]]; }
+    if (op === "()") { var oo = run(x[1], s); if (oo == null || blockedKey(x[2])) return undefined; var a = x[3].map(function (y) { return run(y, s); }); return typeof oo[x[2]] === "function" ? oo[x[2]].apply(oo, a) : undefined; }
     if (op === "u!") return !run(x[1], s);
     if (op === "u-") return -run(x[1], s);
     var l = run(x[1], s), r = run(x[2], s);
@@ -276,7 +288,13 @@
   var raw = {};
   var scope = new Proxy(raw, {
     get: function (t, k) { if (k === "$") return t; return k in t ? t[k] : 0; },
-    set: function (t, k, v) { t[k] = v; return true; }
+    set: function (t, k, v) {
+      if (t[k] !== v) {
+        t[k] = v;
+        if (remembered[k]) rememberedDirty = true;
+      }
+      return true;
+    }
   });
 
   // ---- scopes: data-kit-scope="<name>" marks a component boundary ----
@@ -312,30 +330,115 @@
   //   data-kit-scope="{ count: 5, inc: () => count = count + 1 }" → an INLINE blueprint (IR methods)
   // Inline blueprints/init are the same compiled grammar as everything else — parsed, never eval'd —
   // and being markup they are visible to the server (verify + future PreRender).
+  // ---- IndexedDB persistence for dynamic CDN components (opt-in via data-kit-persist="true") ----
+  var DB_NAME = "kitwork";
+  var STORE_NAME = "blueprints";
+  var dbPromise = null;
+  function getDB() {
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error("IndexedDB not supported")); return; }
+      var req = indexedDB.open(DB_NAME, 1);
+      req.onupgradeneeded = function (e) {
+        var db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          db.createObjectStore(STORE_NAME);
+        }
+      };
+      req.onsuccess = function (e) { resolve(e.target.result); };
+      req.onerror = function (e) { reject(e.target.error); };
+    });
+    return dbPromise;
+  }
+  function dbGet(key) {
+    return getDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_NAME, "readonly");
+        var store = tx.objectStore(STORE_NAME);
+        var req = store.get(key);
+        req.onsuccess = function (e) { resolve(e.target.result); };
+        req.onerror = function (e) { reject(e.target.error); };
+      });
+    });
+  }
+  function dbSet(key, val) {
+    return getDB().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(STORE_NAME, "readwrite");
+        var store = tx.objectStore(STORE_NAME);
+        var req = store.put(val, key);
+        req.onsuccess = function () { resolve(); };
+        req.onerror = function (e) { reject(e.target.error); };
+      });
+    });
+  }
+
+  function injectScriptCode(code, cname) {
+    try {
+      var blob = new Blob([code], { type: "application/javascript" });
+      var url = URL.createObjectURL(blob);
+      var s = document.createElement("script");
+      s.src = url;
+      s.async = true;
+      s.onload = function () {
+        URL.revokeObjectURL(url);
+        scheduleRender();
+      };
+      s.onerror = function () {
+        URL.revokeObjectURL(url);
+        console.error("kitjs: failed to execute stored component '" + cname + "'");
+      };
+      document.head.appendChild(s);
+    } catch (e) {
+      console.error("kitjs: failed to create blob for '" + cname + "'", e);
+    }
+  }
+
+  function fetchCodeAndStore(url, cname) {
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.text();
+      })
+      .then(function (code) {
+        dbSet(cname, code).catch(function (err) {
+          console.warn("kitjs: failed to store component '" + cname + "' to IndexedDB", err);
+        });
+        injectScriptCode(code, cname);
+      })
+      .catch(function (err) {
+        console.error("kitjs: failed to fetch component '" + cname + "' from " + url, err);
+      });
+  }
+
   var loadingComponents = {};
   function loadComponentFromCDN(cname) {
-    if (loadingComponents[cname]) return;
+    var base = kitwork.cdnComponents;
+    if (!base || loadingComponents[cname]) return;          // opt-in only — off by default
+    // Validate name[@version] so a hostile attribute can never build an unexpected URL.
+    var m = /^([a-z][a-z0-9-]*)(?:@([v0-9.]+))?$/.exec(cname);
+    if (!m) { console.error("kitjs: invalid component name '" + cname + "'"); return; }
     loadingComponents[cname] = true;
-    var cdnComponents = kitwork.cdnComponents || defaultCDNComponents;
-    var parts = cname.split("@");
-    var name = parts[0];
-    var version = parts[1];
-    var url = cdnComponents + "/" + name + "/";
-    if (version) {
-      url += version + ".js";
+    var url = base.replace(/\/+$/, "") + "/" + m[1] + "/" + (m[2] || m[1]) + ".js";
+
+    if (kitwork.useIndexed && window.indexedDB) {
+      dbGet(cname).then(function (cachedCode) {
+        if (cachedCode) {
+          injectScriptCode(cachedCode, cname);
+        } else {
+          fetchCodeAndStore(url, cname);
+        }
+      }).catch(function () {
+        fetchCodeAndStore(url, cname);
+      });
     } else {
-      url += name + ".js";
+      var s = document.createElement("script");
+      s.src = url;
+      s.async = true;
+      s.onload = function () { scheduleRender(); };
+      s.onerror = function () { console.error("kitjs: failed to load component '" + cname + "' from " + url); };
+      document.head.appendChild(s);
     }
-    var s = document.createElement("script");
-    s.src = url;
-    s.async = true;
-    s.onload = function () {
-      scheduleRender();
-    };
-    s.onerror = function () {
-      console.error("Failed to load JIT component: " + cname + " from " + url);
-    };
-    document.head.appendChild(s);
   }
 
   function boundaryScope(b) {
@@ -349,8 +452,6 @@
         if (blueprints[cname]) {
           seedComponent(st.scope, blueprints[cname]);
           st.seeded = true;
-          var parent = b.parentElement ? scopeFor(b.parentElement) : scope;
-          parent[cname] = st.scope;
           runInit(b);
         } else {
           loadComponentFromCDN(cname);
@@ -438,8 +539,19 @@
       },
       set: function (t, k, v) {
         var objs = chainFor(b);
-        for (var i = 0; i < objs.length; i++) { if (k in objs[i]) { objs[i][k] = v; return true; } }
-        objs[0][k] = v;
+        for (var i = 0; i < objs.length; i++) {
+          if (k in objs[i]) {
+            if (objs[i][k] !== v) {
+              objs[i][k] = v;
+              if (remembered[k]) rememberedDirty = true;
+            }
+            return true;
+          }
+        }
+        if (objs[0][k] !== v) {
+          objs[0][k] = v;
+          if (remembered[k]) rememberedDirty = true;
+        }
         return true;
       }
     });
@@ -505,6 +617,7 @@
   var REMEMBER = "[data-kitwork-remember],[data-kit-remember]";
   var STOREKEY = "kitwork:$";
   var remembered = {};
+  var rememberedDirty = false;
   var lastPersisted = "";
   function parseKeys(v) {
     return (v || "").trim().replace(/^\[/, "").replace(/\]$/, "").split(/[\s,]+/).filter(Boolean);
@@ -518,11 +631,13 @@
     for (var k in remembered) { if (Object.prototype.hasOwnProperty.call(saved, k)) raw[k] = saved[k]; }
   }
   function persistRemembered() {
+    if (!rememberedDirty) return;
     var keys = Object.keys(remembered);
-    if (!keys.length) return;
+    if (!keys.length) { rememberedDirty = false; return; }
     var obj = {};
     for (var i = 0; i < keys.length; i++) { if (keys[i] in raw) obj[keys[i]] = raw[keys[i]]; }
     var s = JSON.stringify(obj);
+    rememberedDirty = false;
     if (s === lastPersisted) return;   // dirty check — never churn localStorage on unrelated renders
     lastPersisted = s;
     try { localStorage.setItem(STOREKEY, s); } catch (e) { }
@@ -800,26 +915,7 @@
     if (!appEl) return;
     kitwork.hydrate = true;
 
-    // Parse app mode & version
-    var appVal = appEl.getAttribute("data-kitwork-app") || appEl.getAttribute("data-kit-app") || "";
-    var mode = "runtime";
-    var version = "latest";
-    if (appVal) {
-      var parts = appVal.split("@");
-      if (parts.length === 2) {
-        mode = parts[0];
-        version = parts[1];
-      } else if (parts.length === 1 && parts[0]) {
-        var val = parts[0];
-        if (val.charAt(0) === "v" || (val.charAt(0) >= "0" && val.charAt(0) <= "9")) {
-          version = val;
-        } else {
-          mode = val;
-        }
-      }
-    }
-    kitwork.appMode = mode;
-    kitwork.appVersion = version;
+    // appMode & appVersion are parsed globally by initAppConfig at boot
 
     var inflight = null;                  // AbortController for the current visit
     var watchdog = null;                  // fetch-timeout watchdog timer
@@ -1135,7 +1231,33 @@
   // Back-compat alias: earlier hydrate demos and docs used window.hydrate.
   window.hydrate = kitwork;
 
-  function boot() { loadRemembered(); seedModels(); render(); syncLive(); syncApi(); bindVisible(); initDrive(); }
+  function initAppConfig() {
+    var appEl = document.querySelector("[data-kitwork-app],[data-kit-app],[data-kitwork-hydrate],[data-kit-hydrate]");
+    if (appEl) {
+      var appVal = appEl.getAttribute("data-kitwork-app") || appEl.getAttribute("data-kit-app") || "";
+      var mode = "runtime";
+      var version = "latest";
+      if (appVal) {
+        var parts = appVal.split("@");
+        if (parts.length === 2) {
+          mode = parts[0];
+          version = parts[1];
+        } else if (parts.length === 1 && parts[0]) {
+          var val = parts[0];
+          if (val.charAt(0) === "v" || (val.charAt(0) >= "0" && val.charAt(0) <= "9")) {
+            version = val;
+          } else {
+            mode = val;
+          }
+        }
+      }
+      kitwork.appMode = mode;
+      kitwork.appVersion = version;
+      kitwork.useIndexed = appEl.getAttribute("data-kitwork-indexed") === "true" || appEl.getAttribute("data-kit-indexed") === "true";
+    }
+  }
+
+  function boot() { initAppConfig(); loadRemembered(); seedModels(); render(); syncLive(); syncApi(); bindVisible(); initDrive(); }
   // Another tab changed a remembered value → adopt it and re-render (live cross-tab sync).
   window.addEventListener("storage", function (e) {
     if (e.key !== STOREKEY) return;
