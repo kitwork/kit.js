@@ -1,157 +1,156 @@
-# kitjs · by [Kitwork](https://kitwork.io)
+# kit.js — Ultra-lightweight client-side interactive runtime extracted from Kitwork Engine
 
-**This is not a framework.**
+**kit.js** is not a traditional JavaScript framework. It is an ultra-lightweight interactive client runtime (~27KB minified, ~7KB gzipped) born and extracted directly from the core design philosophy of **Kitwork Engine**.
 
-It is proof that you don't need one: a ~27KB kernel — an IR walker, bytecode-style
-expressions, delegated events — and your plain HTML behaves like it has a framework.
-No build step. No node_modules. No virtual DOM. **No `eval`, ever.**
+The mission of `kit.js` is to deliver powerful reactive state management and a seamless Single Page Application (SPA) experience directly on plain HTML markup **without build steps, without `node_modules`, without a Virtual DOM, and absolutely without ever using `eval()`**.
 
 ```html
+<!-- Include the kit.js interactive kernel -->
 <script src="https://cdn.jsdelivr.net/npm/@kitwork/kitjs@1"></script>
 
+<!-- Define the interactive application boundary -->
 <section data-kit-app="runtime@v1.0.0">
   <button data-kit-click="n = n + 1">+1</button>
   <b data-kit-text="n * qty">0</b>
   <input type="number" data-kit-model="qty" value="2">
-  <span data-kit-show="n > 3">unlocked</span>
+  <span data-kit-show="n > 3">Unlocked</span>
 </section>
 ```
 
-That's the whole program. View source on any page using kitjs and you can read
-everything it will do — behavior lives in attributes, not in a bundle.
+All interactions, state modifications, and event bindings are declared inline via standard HTML attributes (`data-kit-*`). Anyone inspecting the page's source code can instantly read and understand exactly how every element behaves.
 
-**Try it live:** [kitwork.io/playground](https://kitwork.io/playground) — type `data-kit-*`
-markup, watch it run in an isolated frame, and inspect the compiled IR for every expression.
+---
 
-## What you get, standalone (any backend, or no backend)
+## 1. Relationship with Kitwork Engine
 
-| Capability | Write | What happens |
-|---|---|---|
-| Expressions | `data-kit-text="n * qty"` | parsed by the kernel's tiny compiler → walked, no eval |
-| Events | `data-kit-click="n = n + 1"` | one delegated listener on `document` |
-| Two-way input | `data-kit-model="qty"` | scope ⇄ input, typed (`number` inputs coerce) |
-| Validation UX | `data-kit-validate="password.length >= 6 && confirm == password"` | element gets `data-state="valid|invalid"` for CSS; invalid forms don't submit |
-| Live / realtime | `data-kit-live="/any/sse/endpoint"` | SSE JSON patches merge into scope → re-render. One connection per URL no matter how many regions subscribe; auto-closed when the last subscriber leaves the DOM |
-| SPA navigation | a `[data-kit-app]` region (or `<main>`) | same-origin links & GET forms are fetched and **morphed** in place — focus, cursor, scroll and input state survive. History, scroll restore, hover prefetch included |
-| Verbs | `kitwork.behavior("copy", (el, e) => …)` + `data-kitwork-action="copy"` | your own registered behaviors ride the same kernel |
+`kit.js` is the standalone client-side build of **jitjs** — the JIT frontend delivery module of **Kitwork Engine** (written in Go). When running within the Kitwork ecosystem:
 
-Leak-free by architecture: nodes carry **no listeners and no closures** (everything is
-delegated), per-element state hides behind a `Symbol` and dies with its node, SSE
-streams are reference-counted against the DOM. Removing markup cleans up after itself
-— there is nothing to unbind.
+* **Server-Side JIT Verification:** Every expression declared in `data-kit-*` attributes is pre-compiled and syntax-verified by the Go engine at render time. Typos are caught on the server before the page reaches the user.
+* **One Rule, Two Ends Validation:** A validation expression in `data-kit-validate` runs reactively on the client as you type, and the *exact same* compiled expression is validated on the Go server upon form submission (`ctx.validate`), eliminating client-server validation drift.
+* **Zero-Toolchain Frontend:** Combined with Kitwork Engine, all stylesheets, icons, fonts, and client-side behaviors are compiled JIT and streamed on demand via `jitcss`, `jiticons`, `jitfonts`, and `jitjs`.
 
-Works in every evergreen browser. `~27KB` minified, `~7KB` gzipped, one file you can
-read end to end.
+---
 
-## The other half — Kitwork
+## 2. Standalone Capabilities of kit.js (Any Backend)
 
-kitjs is the piece you can hold in your hand. The system it was carved from is
-**jitjs**, inside the [Kitwork engine](https://kitwork.io) — a Go host that owns a
-JavaScript compiler, a bytecode VM, and the HTTP server itself. On Kitwork, this same
-kernel is **JIT-delivered**:
+Even when running standalone without the Go backend engine, `kit.js` works out-of-the-box, providing:
 
-- the server **compiles and verifies every expression at render time** — a typo in
-  `data-kit-text` is caught on the server, like a linter you didn't install;
-- pages ship **only the behaviors they use**;
-- `data-kit-validate` becomes **one rule, two ends**: the client walks it as you type,
-  the server evaluates the *same* compiled rule on submit (`ctx.validate`) — the two
-  can never drift;
-- `data-kit-live` rides the engine's built-in multi-tenant SSE broker;
-- CSS, icons and fonts are generated the same way (jitcss / jiticons / jitfonts) —
-  a frontend with **no toolchain at all**.
+| Capability | Declarative Directive | Description |
+| :--- | :--- | :--- |
+| **Expressions** | `data-kit-text="n * qty"` | Compiled into a lightweight AST representation and executed via a secure AST walker, fully complying with strict Content Security Policies (CSP). |
+| **Event Delegation** | `data-kit-click="n = n + 1"` | A single delegated event listener bound to `document` handles all events, reducing memory footprint and avoiding leaks. |
+| **Two-Way Binding** | `data-kit-model="qty"` | Automatically synchronizes element values with local scope, performing type coercion (e.g. converting to a `number` when `type="number"`). |
+| **Validation UX** | `data-kit-validate="confirm == password"` | Evaluates inputs on the fly, applying `data-state="valid\|invalid"` for easy CSS styling and preventing invalid form submissions. |
+| **Realtime SSE** | `data-kit-live="/api/sse"` | Automatically establishes an SSE connection, merging incoming JSON patches into the page state. Auto-closes when the DOM element is removed to save resources. |
+| **SPA Navigation** | Declared on `data-kit-app` | Automatically transforms relative links and forms into AJAX requests. Fetches new content and performs smooth DOM **morphing** (preserving input focus, scroll position, and cursor states). |
+| **Custom Verbs** | `data-kit-action="copy"` | Easily extend kernel behaviors by registering custom JavaScript actions via `kitwork.behavior()`. |
 
-No V8, no Node. A deliberately small JavaScript subset, compiled to bytecode, executed
-by a hand-written VM. kitjs is what that philosophy looks like when it fits in a
-`<script>` tag.
+---
 
-## Attribute reference
+## 3. Attribute Reference Guide
 
-Every attribute has two spellings that behave identically: the short `data-kit-*` and
-the canonical `data-kitwork-*`.
+You can use the shorthand `data-kit-*` or the canonical `data-kitwork-*` spelling interchangeably.
 
-| Attribute | Value |
-|---|---|
-| `data-kit-app` | region app initialization (`"[mode]@[version]"`). Enables SPA navigation unless `="false"` on child links/forms |
-| `data-kit-text` | expression → `textContent` |
-| `data-kit-show` | expression → element hidden when falsy |
-| `data-kit-click` | expression, run on click |
-| `data-kit-model` | scope key, two-way bound to the input |
-| `data-kit-validate` | expression → `data-state="valid\|invalid"` + submit gate |
-| `data-kit-live` | SSE URL pushing JSON scope patches (into the page scope) |
-| `data-kit-scope` | names a component boundary — state inside is local |
-| `data-kit-remember` | space-separated scope keys saved to/loaded from `localStorage` |
-| `data-kit-indexed` | `"true"` to enable IndexedDB persistence/caching for lazy-loaded CDN components |
-| `data-kit-api` | JSON endpoint URL to load boundary scope data dynamically on mount (with `data-state="loading\|ready\|error"`) |
-| `data-kit-trigger` | `"visible"` to fire registered action when element is visible in viewport |
-| `data-kit-component` | name of a registered component template to hydrate |
-| `data-kit-key` | stable identifier key used to speed up and stabilize morph matching (equivalent to `data-key`) |
-| `data-kit-action` | name of a registered behavior (verb) |
+| Attribute | Data Type | Description |
+| :--- | :--- | :--- |
+| `data-kit-app` | `"[mode]@[version]"` or `false` | Initializes the local runtime scope and enables SPA navigation. |
+| `data-kit-text` | JS Expression | Computes the expression and assigns the result to the element's `textContent`. |
+| `data-kit-show` | JS Expression | Shows or hides the element based on the truthiness of the expression. |
+| `data-kit-click` | JS Expression | Executes the expression whenever the element is clicked. |
+| `data-kit-model` | State Key (string) | Synchronizes scope state in a two-way fashion with input elements. |
+| `data-kit-validate` | Logic Expression | Triggers state validation on inputs, applying `data-state` to elements. |
+| `data-kit-live` | SSE Endpoint URL | Streams real-time updates and merges JSON patches into the scope state. |
+| `data-kit-scope` | Scope Name | Creates a local state boundary (local scope) supporting nested prototype inheritance. |
+| `data-kit-remember` | Space-separated keys | Persists and automatically restores specified scope state variables from `localStorage`. |
+| `data-kit-indexed` | `"true" \| "false"` | Enables local IndexedDB caching and offline persistence for dynamic content. |
+| `data-kit-api` | JSON API Endpoint | Fetches remote JSON data on mount, providing state indicators (`loading`, `ready`, `error`). |
+| `data-kit-trigger` | `"visible"` | Triggers the registered action as soon as the element enters the viewport. |
+| `data-kit-component` | Component Name | Hydrates the element template with the specified registered component layout. Supports aliasing via `=`. |
+| `data-kit-alias` | Alias Name (e.g. `$name`) | Registers a global alias reference to control this element/scope from anywhere. |
+| `data-kit-action` | Action Name | Binds a custom behavior verb to this element. |
 
+---
 
-### Scopes
+## 4. State Scopes & Imperative Escape Hatches
 
-State is page-global until you draw a boundary. `data-kit-scope` gives a subtree its own
-scope with closure-like resolution — reads fall through to ancestor scopes, writes stay
-with the scope that owns the key, and `$.` addresses the page scope explicitly (the same
-`$` Kitwork's server templates use for their root data):
+### A. Hierarchical State Management (Scopes)
+State is global to the page unless bounded by a `data-kit-scope` directive. When a scope is declared:
+* Read operations bubble upward, retrieving values from ancestor scopes if not present in the local boundary.
+* Write operations (variable assignments) are bound directly to the local scope.
+* Use the special `$.` prefix to read or write directly to the page's root scope (the same `$` context used by server-side templates).
 
 ```html
 <div data-kit-scope="counter">
+  <!-- These two counters run completely independently, each holding its own 'n' -->
   <button data-kit-click="n = n + 1">+</button> <b data-kit-text="n">0</b>
 </div>
 <div data-kit-scope="counter">
   <button data-kit-click="n = n + 1">+</button> <b data-kit-text="n">0</b>
 </div>
-<!-- two independent counters — same markup, own state -->
-
-<button data-kit-click="$.total = $.total + 1">page-level count</button>
 ```
 
-Scope objects live behind a `Symbol` on the boundary node — remove the node and its
-state is gone with it.
-
-### The imperative escape hatch: `$el` / `$root`
-
-Most of the time you change state and let bindings update the DOM. For the genuinely
-imperative moments — focus an input, scroll, toggle an attribute on a child, hand an
-element to a third-party widget — two variables resolve to real elements inside any
-expression:
-
-- `$el` — the element the directive is on
-- `$root` — its component boundary (nearest `data-kit-scope`, else `<html>`)
+### B. Imperative Escape Hatches: `$el`, `$root`, `$app`, and Aliases
+For situations requiring imperative DOM actions (such as focusing an input, scrolling elements, or interfacing with third-party libraries), `kit.js` exposes special reference keywords:
+* `$el` — Resolves to the current native DOM element where the directive is placed.
+* `$root` — Resolves to the nearest parent DOM element defining `data-kit-scope` (or `<html>` if none exists).
+* `$app` — The native bridge portal exposing hardware functions and OS-level APIs in expressions:
+  * `$app.camera(scopeKey)`: Activates the hardware camera to take a photo, binding the file cache URI directly to the specified `scopeKey`.
+  * `$app.qrcode(scopeKey)`: Starts the native QR code reader, resolving the scanned token back to the `scopeKey`.
+  * `$app.biometrics(scopeKey)`: Triggers system biometric verification (FaceID / Fingerprint).
+* **Aliases (e.g. `$sider`)** — Custom aliases also act as direct imperative escape hatch references. Any expression on the page can use the alias directly to interact with that element's API or scope.
 
 ```html
-<div data-kit-scope="editor">
-  <button data-kit-click="$root.querySelector('input').focus()">focus</button>
-  <button data-kit-click="$root.querySelector('button.save').setAttribute('disabled', '')">lock</button>
-</div>
+<!-- Take a photo via the native hardware bridge -->
+<button data-kit-click="$app.camera('user_avatar')">Capture Avatar</button>
 ```
 
-They are **not** prototype methods — no `Element.prototype` is touched. It's the native
-API (`querySelector`, `focus`, `classList`, `setAttribute`, …), reached through a scoped
-variable, so the expression executes exactly as it reads. **Reads and method calls
-only:** to *set* a value, bind it (`data-kit-model`) rather than poking `.value =` — the
-grammar has no member assignment on purpose. Use this hatch sparingly; it steps outside
-the declarative model by design.
+#### Component & Element Aliasing Mechanism
+To easily control or trigger methods on component boundaries from other unrelated parts of the DOM, you can assign an alias starting with a `$` prefix:
+1. **Component Aliases:** Declared directly in the component instantiation by appending `=[alias_name]` after the template name:
+   * `data-kit-component="sidebar=$sider"`
+   * `data-kit-component="sidebar@1.0.0=$sider"`
+2. **Element/Scope Aliases:** Declared using the `data-kit-alias` attribute on standard elements:
+   * `<div data-kit-alias="$sider" data-kit-scope="navigation">...</div>`
 
-The expression grammar: numbers, strings (`'single-quoted'`), booleans, `null`,
-variables, `+ - * / %`, comparisons, `&& || !`, ternary `? :`, assignment `=` (to a
-variable, or to the page scope via `$.key = …`), member access, method calls
-(`price.toFixed(2)`, `email.includes('@')`), array literals `[1, 2]`, object literals `{ x: 1 }`, arrow function lambdas `(item) => item.id`, and statement sequences separated by semicolons `expr1; expr2`.
-That's all of it — **the grammar is closed**. Precompiled pages may instead carry
-`data-kitwork-*-ir` attributes (the compiled form); the kernel reads both.
+Once registered, you can invoke methods and control its state from anywhere on the page:
 
+```html
+<!-- Triggers the sider's open action from an unrelated button -->
+<button data-kit-click="$sider.open()">Open Sidebar</button>
+```
 
-## Contributing
+---
 
-- **Grammar closed, registry open.** Pull requests adding syntax to the expression
-  language will be declined by policy — new capability belongs in a registered
-  behavior (`kitwork.behavior(...)`), not in the grammar. This is what keeps the
-  kernel small and every kitjs page readable forever.
-- `dist/` is **generated** from the Kitwork engine (the single source of truth) —
-  see [BUILDING.md](BUILDING.md). Don't edit dist files by hand.
+## 5. Future Development Roadmap
 
-## License
+`kit.js` remains committed to its core philosophy of ultra-lightweight declarative markup while introducing deep hardware interfaces and offline performance optimizations:
 
-[MIT](LICENSE) © Huỳnh Nhân Quốc — Kitwork
+### A. Declarative Hardware Bridge
+Continue expanding system-level integration via the `$app` global portal, supporting automated environment detection (standard browser behaviors vs. Go core bridge app environments):
+* **`$app.camera(scopeKey)`**: Smooth native overlays for iOS/Android/Desktop cameras with HTML5 `<input type="file" capture="user">` browser fallbacks.
+* **`$app.qrcode(scopeKey)`**: High-performance camera QR scanner overlays with canvas-based WebRTC browser fallbacks.
+* **`$app.biometrics(scopeKey)`**: Unified OS biometric APIs.
 
+### B. High-Performance DOM Morphing (Morphing Engine v2)
+* Further optimization of DOM diffing algorithms to handle virtualized rendering of extremely large list elements.
+* Native transition and layout animations triggered automatically when DOM nodes are inserted, removed, or rearranged.
+
+### C. Offline-First PWA Architecture
+* Extensions for `data-kit-indexed` to automatically synchronize and persist client state to IndexedDB transparently.
+* Out-of-the-box Service Worker integrations to turn any kit.js page into an offline-capable Progressive Web App with zero configurations.
+
+### D. JIT Component Directory
+* Automated dynamic importing of custom components from local paths or CDN directories upon detecting dynamic component tags inside the DOM, keeping the initial HTML payload as lightweight as possible.
+
+---
+
+## 6. Contributing
+
+* **Closed Grammar, Open Registry:** We strictly decline pull requests proposing changes or additions to the core expression language syntax. All new features and customizations must be added via custom registered behaviors (`kitwork.behavior(...)`). This policy guarantees the kernel remains small, maintainable, and readable forever.
+* **Single Source of Truth:** All files in the `dist/` directory are auto-generated from the Kitwork Go engine workspace. Please refer to [BUILDING.md](BUILDING.md) to rebuild the dist files, and do not modify files in `dist/` manually.
+
+---
+
+## 7. License
+
+Released under the [MIT](LICENSE) License © Huỳnh Nhân Quốc — Kitwork
